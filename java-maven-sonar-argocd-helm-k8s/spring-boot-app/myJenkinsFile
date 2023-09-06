@@ -1,0 +1,75 @@
+pipeline {
+    agent {
+    docker {
+      image 'abhishekf5/maven-abhishek-docker-agent:v1'
+      args '--user root -v /var/run/docker.sock:/var/run/docker.sock' // mount Docker socket to access the host's Docker daemon
+    }
+  }
+   //checkout the branch 
+   stages {
+    stage('Checkout') {
+        steps {
+       checkout([$class: 'GitSCM', 
+	  branches: [[name: '*/main']], 
+	  doGenerateSubmoduleConfigurations: false, 
+	  extensions: [], 
+	  submoduleCfg: [], 
+	  userRemoteConfigs: [[url: 'https://github.com/malle392/Jenkins-Zero-To-Hero.git']]]
+	  )
+    }
+    }
+	stage('Build & Test') {
+     steps {
+       sh 'cd java-maven-sonar-argocd-helm-k8s/spring-boot-app && mvn clean package'
+        }
+	}
+	stage('Sonar code check') {
+	 environment {
+	 SONAR_URL="http://52.57.29.150:9000/"
+	 }
+     steps {
+        withCredentials([string(credentialsId: 'sonarqube', variable: 'SONAR_AUTH_TOKEN')]) {
+          sh 'cd java-maven-sonar-argocd-helm-k8s/spring-boot-app && mvn sonar:sonar -Dsonar.login=$SONAR_AUTH_TOKEN -Dsonar.host.url=${SONAR_URL}'
+        }
+	}
+  }
+  stage('Build image') {
+       steps {
+       sh 'cd java-maven-sonar-argocd-helm-k8s/spring-boot-app \
+        &&  docker build -t  alle002/ultimate-cicd:latest . '
+    }
+  }
+  stage('Login to Docker') {
+      environment {
+	  DOCKERHUB_CREDENTIALS = credentials('docker-cred')
+	  }
+      steps {
+        sh 'echo $DOCKERHUB_CREDENTIALS_PSW | docker login -u $DOCKERHUB_CREDENTIALS_USR --password-stdin'
+      }
+    }
+    stage('Push Docker image') {
+      steps {
+        sh 'docker push alle002/ultimate-cicd:latest'
+      }
+    }
+	stage('Update deployment file') {
+	 environment {
+	 GIT_REPO_NAME="Jenkins-Zero-To-Hero"
+	 GIT_USER_NAME="malle392"
+	 }
+	 steps {
+	  withCredentials([string(credentialsId: 'gitb', variable: 'GITHUB_TOKEN')]) {
+	  sh 'git config user.email "mahanandi.alle@gmail.com" \
+         && git config user.name "Mahanandi Alle" \
+         && sed -i "s/replaceImageTag/latest/g" java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml \
+         && git add java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml \
+         && git commit -m "Update deployment image to version latest" \
+         && git push https://${GITHUB_TOKEN}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME} HEAD:main '
+	  }
+	} 
+  }
+ }
+}
+
+
+	
